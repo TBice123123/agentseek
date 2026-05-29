@@ -12,6 +12,7 @@ uv sync
 npm install --prefix frontend
 
 cp .env.example .env
+cp frontend/.env.example frontend/.env
 # Optionally merge in the model credentials from your existing repository root `.env`.
 
 uv run agentseek run --no-browser
