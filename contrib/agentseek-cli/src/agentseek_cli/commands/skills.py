@@ -6,9 +6,10 @@ dependency of ``agentseek-cli``. We expose its subcommands verbatim — ``add``,
 through, including those we don't know about. This keeps AgentSeek aligned
 with whatever the upstream CLI adds without us re-issuing patches.
 
-**Default source for ``add``:** When no positional source argument is given,
-``ob-labs/agentseek`` is used automatically. This lets developers run
-``agentseek skills add --all --global`` without remembering the repo path.
+**Default source for ``add``:** When the first ``add`` argument is not an
+explicit source, ``ob-labs/agentseek`` is inserted before the user-provided
+arguments. A bare ``agentseek skills add`` selects all AgentSeek skills while
+leaving scope and confirmation to upstream.
 
 Install paths follow upstream conventions: project-scope skills land in
 ``./<agent>/skills/`` (e.g. ``./.claude/skills/``), global skills in
@@ -26,6 +27,15 @@ from typing import Annotated
 import typer
 
 DEFAULT_SOURCE = "ob-labs/agentseek"
+
+# Embedded catalogue avoids cloning the full repo just to list AgentSeek skills.
+# Update this when adding/removing skills in the skills/ directory.
+SKILLS_CATALOGUE: tuple[tuple[str, str], ...] = (
+    ("langsmith-trace", "LangSmith CLI setup, tracing, and trace debugging for AgentSeek backends"),
+    ("langchain-dev-guide", "LangChain / LangGraph engineering pitfalls and verified fixes"),
+    ("langchain-cn-models", "Integrate Chinese LLM providers (DeepSeek, Qwen, GLM) into LangChain"),
+    ("github-repo-cards", "Generate visual GitHub repo cards for documentation and social sharing"),
+)
 
 SKILLS_COMMANDS: tuple[str, ...] = ("add", "list", "find", "update", "remove", "init")
 
@@ -92,47 +102,44 @@ def _forward(ctx: typer.Context, command: str) -> None:
     raise typer.Exit(completed.returncode)
 
 
-# Flags that consume the next token as a value (not a positional source).
-# Maintenance: if upstream `npx-skills add` introduces new flags with required
-# values, add them here — otherwise the value may be mistaken for a source arg.
-_FLAGS_WITH_VALUE = frozenset({
-    "-s",
-    "--skill",
-    "-a",
-    "--agent",
-    "-o",
-    "--output",
-    "--dir",
-})
-
-
-def _has_positional_source(args: list[str]) -> bool:
-    """Check if args contain a positional source argument (not a flag value)."""
-    skip_next = False
-    for arg in args:
-        if skip_next:
-            skip_next = False
-            continue
-        if arg in _FLAGS_WITH_VALUE:
-            skip_next = True
-            continue
-        if arg.startswith("-"):
-            continue
-        return True
-    return False
+def _has_leading_source(args: list[str]) -> bool:
+    return bool(args) and not args[0].startswith("-")
 
 
 @app.command("add", context_settings=_PASSTHROUGH_CONTEXT_SETTINGS)
 def skills_add(ctx: typer.Context) -> None:
-    """Install skills. Defaults to ob-labs/agentseek when no source is given."""
+    """Install AgentSeek skills by default, or use an explicit source."""
     cwd = ctx.ensure_object(dict).get("cwd", Path.cwd())
     base = _find_skills_cmd()
     args = list(ctx.args)
-    if not _has_positional_source(args):
-        args.insert(0, DEFAULT_SOURCE)
-    cmd = [*base, "add", *args]
+    if _has_leading_source(args):
+        cmd = [*base, "add", *args]
+    elif args:
+        cmd = [*base, "add", DEFAULT_SOURCE, *args]
+    else:
+        cmd = [*base, "add", DEFAULT_SOURCE, "--all"]
     completed = subprocess.run(cmd, cwd=str(cwd), check=False)  # noqa: S603
     raise typer.Exit(completed.returncode)
+
+
+@app.command("list", context_settings=_PASSTHROUGH_CONTEXT_SETTINGS)
+def skills_list(ctx: typer.Context) -> None:
+    """List the embedded AgentSeek catalogue, or pass args through."""
+    args = list(ctx.args)
+    if args:
+        cwd = ctx.ensure_object(dict).get("cwd", Path.cwd())
+        base = _find_skills_cmd()
+        cmd = [*base, "list", *args]
+        completed = subprocess.run(cmd, cwd=str(cwd), check=False)  # noqa: S603
+        raise typer.Exit(completed.returncode)
+
+    typer.echo(f"\n  AgentSeek Skills ({DEFAULT_SOURCE})\n")
+    for name, description in SKILLS_CATALOGUE:
+        typer.echo(f"    {name}")
+        typer.echo(f"      {description}\n")
+    typer.echo("  Install:")
+    typer.echo("    agentseek skills add --all --global        # all skills")
+    typer.echo("    agentseek skills add --skill <name> -g     # one skill\n")
 
 
 def _passthrough(command: str):
@@ -145,7 +152,7 @@ def _passthrough(command: str):
 
 
 for _command_name in SKILLS_COMMANDS:
-    if _command_name == "add":
+    if _command_name in {"add", "list"}:
         continue
     app.command(_command_name, context_settings=_PASSTHROUGH_CONTEXT_SETTINGS)(_passthrough(_command_name))
 
